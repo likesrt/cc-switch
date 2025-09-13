@@ -5,6 +5,8 @@ mod config;
 mod migration;
 mod provider;
 mod store;
+mod settings;
+mod wsl_env;
 
 use store::AppState;
 use tauri::{
@@ -342,6 +344,8 @@ pub fn run() {
             commands::open_app_config_folder,
             commands::get_settings,
             commands::save_settings,
+            commands::list_wsl_distros,
+            commands::resolve_wsl_home,
             commands::check_for_updates,
             update_tray_menu,
         ])

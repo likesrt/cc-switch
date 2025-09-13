@@ -201,7 +201,7 @@ export const tauriAPI = {
       return await invoke("get_settings");
     } catch (error) {
       console.error("获取设置失败:", error);
-      return { showInTray: true };
+      return { showInTray: true, targetEnv: "windows" };
     }
   },
 
@@ -221,6 +221,26 @@ export const tauriAPI = {
       await invoke("check_for_updates");
     } catch (error) {
       console.error("检查更新失败:", error);
+    }
+  },
+
+  // 列出 WSL 发行版
+  listWSLDistros: async (): Promise<string[]> => {
+    try {
+      return await invoke("list_wsl_distros");
+    } catch (error) {
+      console.error("获取 WSL 发行版失败:", error);
+      return [];
+    }
+  },
+
+  // 解析 WSL 指定发行版的 HOME
+  resolveWSLHome: async (distro: string): Promise<string> => {
+    try {
+      return await invoke("resolve_wsl_home", { distro });
+    } catch (error) {
+      console.error("解析 WSL HOME 失败:", error);
+      return "";
     }
   },
 

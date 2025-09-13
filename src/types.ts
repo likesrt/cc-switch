@@ -24,4 +24,8 @@ export interface AppConfig {
 export interface Settings {
   // 是否在系统托盘（macOS 菜单栏）显示图标
   showInTray: boolean;
+  // 目标环境：windows 或 wsl（可选，默认 windows）
+  targetEnv?: "windows" | "wsl";
+  // 选定的 WSL 发行版名称（当 targetEnv 为 wsl 时生效）
+  wslDistro?: string;
 }

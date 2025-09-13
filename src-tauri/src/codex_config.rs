@@ -54,7 +54,16 @@ pub fn delete_codex_provider_config(provider_id: &str, provider_name: &str) -> R
 pub fn write_codex_live_atomic(auth: &Value, config_text_opt: Option<&str>) -> Result<(), String> {
     let auth_path = get_codex_auth_path();
     let config_path = get_codex_config_path();
+    write_codex_live_atomic_at(auth, config_text_opt, &auth_path, &config_path)
+}
 
+/// 原子写入（可指定路径，便于 WSL UNC 环境）
+pub fn write_codex_live_atomic_at(
+    auth: &Value,
+    config_text_opt: Option<&str>,
+    auth_path: &std::path::Path,
+    config_path: &std::path::Path,
+) -> Result<(), String> {
     if let Some(parent) = auth_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建 Codex 目录失败: {}", e))?;
     }
@@ -82,15 +91,15 @@ pub fn write_codex_live_atomic(auth: &Value, config_text_opt: Option<&str>) -> R
     }
 
     // 第一步：写 auth.json
-    write_json_file(&auth_path, auth)?;
+    write_json_file(auth_path, auth)?;
 
     // 第二步：写 config.toml（失败则回滚 auth.json）
-    if let Err(e) = write_text_file(&config_path, &cfg_text) {
+    if let Err(e) = write_text_file(config_path, &cfg_text) {
         // 回滚 auth.json
         if let Some(bytes) = old_auth {
-            let _ = atomic_write(&auth_path, &bytes);
+            let _ = atomic_write(auth_path, &bytes);
         } else {
-            let _ = delete_file(&auth_path);
+            let _ = delete_file(auth_path);
         }
         return Err(e);
     }
@@ -103,6 +112,15 @@ pub fn read_codex_config_text() -> Result<String, String> {
     let path = get_codex_config_path();
     if path.exists() {
         std::fs::read_to_string(&path).map_err(|e| format!("读取 config.toml 失败: {}", e))
+    } else {
+        Ok(String::new())
+    }
+}
+
+/// 读取指定路径的 config.toml 文本
+pub fn read_codex_config_text_at(path: &Path) -> Result<String, String> {
+    if path.exists() {
+        std::fs::read_to_string(path).map_err(|e| format!("读取 {} 失败: {}", path.display(), e))
     } else {
         Ok(String::new())
     }
@@ -137,6 +155,13 @@ pub fn read_and_validate_codex_config_text() -> Result<String, String> {
 /// 从指定路径读取并校验 config.toml，返回文本（可能为空）
 pub fn read_and_validate_config_from_path(path: &Path) -> Result<String, String> {
     let s = read_config_text_from_path(path)?;
+    validate_config_toml(&s)?;
+    Ok(s)
+}
+
+/// 从指定路径读取并校验 config.toml（便于 WSL UNC）
+pub fn read_and_validate_config_from_path_at(path: &Path) -> Result<String, String> {
+    let s = read_codex_config_text_at(path)?;
     validate_config_toml(&s)?;
     Ok(s)
 }

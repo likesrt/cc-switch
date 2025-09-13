@@ -6,7 +6,9 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::app_config::AppType;
 use crate::codex_config;
-use crate::config::{get_claude_settings_path, ConfigStatus};
+use crate::config::ConfigStatus;
+use crate::settings::{load_settings, save_settings as persist_settings};
+use crate::wsl_env;
 use crate::provider::Provider;
 use crate::store::AppState;
 
@@ -88,9 +90,11 @@ pub async fn add_provider(
 
     // 若目标为当前供应商，则先写 live，成功后再落盘配置
     if is_current {
+        // 依据设置决定写入 Windows 或 WSL 路径
+        let settings = load_settings();
         match app_type {
             AppType::Claude => {
-                let settings_path = crate::config::get_claude_settings_path();
+                let settings_path = wsl_env::env_claude_settings_path(&settings)?;
                 crate::config::write_json_file(&settings_path, &provider.settings_config)?;
             }
             AppType::Codex => {
@@ -102,7 +106,9 @@ pub async fn add_provider(
                     .settings_config
                     .get("config")
                     .and_then(|v| v.as_str());
-                crate::codex_config::write_codex_live_atomic(auth, cfg_text)?;
+                let auth_path = wsl_env::env_codex_auth_path(&settings)?;
+                let cfg_path = wsl_env::env_codex_config_path(&settings)?;
+                crate::codex_config::write_codex_live_atomic_at(auth, cfg_text, &auth_path, &cfg_path)?;
             }
         }
     }
@@ -293,16 +299,12 @@ pub async fn switch_provider(
 
             // 回填：读取 live（auth.json + config.toml）写回当前供应商 settings_config
             if !manager.current.is_empty() {
-                let auth_path = codex_config::get_codex_auth_path();
-                let config_path = codex_config::get_codex_config_path();
+                let settings = load_settings();
+                let auth_path = wsl_env::env_codex_auth_path(&settings)?;
+                let config_path = wsl_env::env_codex_config_path(&settings)?;
                 if auth_path.exists() {
                     let auth: Value = crate::config::read_json_file(&auth_path)?;
-                    let config_str = if config_path.exists() {
-                        std::fs::read_to_string(&config_path)
-                            .map_err(|e| format!("读取 config.toml 失败: {}", e))?
-                    } else {
-                        String::new()
-                    };
+                    let config_str = crate::codex_config::read_codex_config_text_at(&config_path)?;
 
                     let live = serde_json::json!({
                         "auth": auth,
@@ -324,12 +326,16 @@ pub async fn switch_provider(
                 .settings_config
                 .get("config")
                 .and_then(|v| v.as_str());
-            crate::codex_config::write_codex_live_atomic(auth, cfg_text)?;
+            let settings = load_settings();
+            let auth_path = wsl_env::env_codex_auth_path(&settings)?;
+            let cfg_path = wsl_env::env_codex_config_path(&settings)?;
+            crate::codex_config::write_codex_live_atomic_at(auth, cfg_text, &auth_path, &cfg_path)?;
         }
         AppType::Claude => {
             use crate::config::{read_json_file, write_json_file};
 
-            let settings_path = get_claude_settings_path();
+            let settings = load_settings();
+            let settings_path = wsl_env::env_claude_settings_path(&settings)?;
 
             // 回填：读取 live settings.json 写回当前供应商 settings_config
             if settings_path.exists() && !manager.current.is_empty() {
@@ -393,20 +399,20 @@ pub async fn import_default_config(
     // 读取当前主配置为默认供应商（不再写入副本文件）
     let settings_config = match app_type {
         AppType::Codex => {
-            let auth_path = codex_config::get_codex_auth_path();
+            let settings = load_settings();
+            let auth_path = wsl_env::env_codex_auth_path(&settings)?;
             if !auth_path.exists() {
                 return Err("Codex 配置文件不存在".to_string());
             }
             let auth: serde_json::Value =
                 crate::config::read_json_file::<serde_json::Value>(&auth_path)?;
-            let config_str = match crate::codex_config::read_and_validate_codex_config_text() {
-                Ok(s) => s,
-                Err(e) => return Err(e),
-            };
+            let config_path = wsl_env::env_codex_config_path(&settings)?;
+            let config_str = crate::codex_config::read_and_validate_config_from_path_at(&config_path)?;
             serde_json::json!({ "auth": auth, "config": config_str })
         }
         AppType::Claude => {
-            let settings_path = get_claude_settings_path();
+            let settings = load_settings();
+            let settings_path = wsl_env::env_claude_settings_path(&settings)?;
             if !settings_path.exists() {
                 return Err("Claude Code 配置文件不存在".to_string());
             }
@@ -446,7 +452,13 @@ pub async fn import_default_config(
 /// 获取 Claude Code 配置状态
 #[tauri::command]
 pub async fn get_claude_config_status() -> Result<ConfigStatus, String> {
-    Ok(crate::config::get_claude_config_status())
+    // 基于环境返回 Claude 状态
+    let settings = load_settings();
+    let path = wsl_env::env_claude_settings_path(&settings)?;
+    Ok(crate::config::ConfigStatus {
+        exists: path.exists(),
+        path: path.to_string_lossy().to_string(),
+    })
 }
 
 /// 获取应用配置状态（通用）
@@ -463,15 +475,17 @@ pub async fn get_config_status(
         .unwrap_or(AppType::Claude);
 
     match app {
-        AppType::Claude => Ok(crate::config::get_claude_config_status()),
+        AppType::Claude => {
+            let settings = load_settings();
+            let path = wsl_env::env_claude_settings_path(&settings)?;
+            Ok(ConfigStatus { exists: path.exists(), path: path.to_string_lossy().to_string() })
+        }
         AppType::Codex => {
-            use crate::codex_config::{get_codex_auth_path, get_codex_config_dir};
-            let auth_path = get_codex_auth_path();
-
-            // 放宽：只要 auth.json 存在即可认为已配置；config.toml 允许为空
+            let settings = load_settings();
+            let auth_path = wsl_env::env_codex_auth_path(&settings)?;
+            let dir = wsl_env::env_codex_dir(&settings)?;
             let exists = auth_path.exists();
-            let path = get_codex_config_dir().to_string_lossy().to_string();
-
+            let path = dir.to_string_lossy().to_string();
             Ok(ConfigStatus { exists, path })
         }
     }
@@ -480,7 +494,9 @@ pub async fn get_config_status(
 /// 获取 Claude Code 配置文件路径
 #[tauri::command]
 pub async fn get_claude_code_config_path() -> Result<String, String> {
-    Ok(get_claude_settings_path().to_string_lossy().to_string())
+    let settings = load_settings();
+    let p = wsl_env::env_claude_settings_path(&settings)?;
+    Ok(p.to_string_lossy().to_string())
 }
 
 /// 打开配置文件夹
@@ -497,9 +513,10 @@ pub async fn open_config_folder(
         .or_else(|| appType.as_deref().map(|s| s.into()))
         .unwrap_or(AppType::Claude);
 
+    let settings = load_settings();
     let config_dir = match app_type {
-        AppType::Claude => crate::config::get_claude_config_dir(),
-        AppType::Codex => crate::codex_config::get_codex_config_dir(),
+        AppType::Claude => wsl_env::env_claude_dir(&settings)?,
+        AppType::Codex => wsl_env::env_codex_dir(&settings)?,
     };
 
     // 确保目录存在
@@ -567,10 +584,8 @@ pub async fn open_app_config_folder(handle: tauri::AppHandle) -> Result<bool, St
 /// 获取设置
 #[tauri::command]
 pub async fn get_settings(_state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    // 暂时返回默认设置：系统托盘（菜单栏）显示开关
-    Ok(serde_json::json!({
-        "showInTray": true
-    }))
+    let s = load_settings();
+    Ok(serde_json::to_value(s).map_err(|e| format!("序列化设置失败: {}", e))?)
 }
 
 /// 保存设置
@@ -579,8 +594,21 @@ pub async fn save_settings(
     _state: State<'_, AppState>,
     settings: serde_json::Value,
 ) -> Result<bool, String> {
-    // TODO: 实现系统托盘显示开关的保存与应用（显示/隐藏菜单栏托盘图标）
-    log::info!("保存设置: {:?}", settings);
+    let mut s = load_settings();
+    // 按键名覆盖（兼容前端只传 showInTray 的情况）
+    if let Some(v) = settings.get("showInTray").and_then(|v| v.as_bool()) {
+        s.show_in_tray = v;
+    }
+    if let Some(v) = settings.get("targetEnv").and_then(|v| v.as_str()) {
+        s.target_env = match v.to_lowercase().as_str() {
+            "wsl" => crate::settings::TargetEnv::Wsl,
+            _ => crate::settings::TargetEnv::Windows,
+        };
+    }
+    if let Some(v) = settings.get("wslDistro").and_then(|v| v.as_str()) {
+        s.wsl_distro = if v.trim().is_empty() { None } else { Some(v.to_string()) };
+    }
+    persist_settings(&s)?;
     Ok(true)
 }
 
@@ -597,4 +625,16 @@ pub async fn check_for_updates(handle: tauri::AppHandle) -> Result<bool, String>
         .map_err(|e| format!("打开更新页面失败: {}", e))?;
 
     Ok(true)
+}
+
+/// 列出已安装的 WSL 发行版
+#[tauri::command]
+pub async fn list_wsl_distros() -> Result<Vec<String>, String> {
+    wsl_env::list_wsl_distros_impl()
+}
+
+/// 解析指定发行版的 $HOME（Linux 路径字符串）
+#[tauri::command]
+pub async fn resolve_wsl_home(distro: String) -> Result<String, String> {
+    wsl_env::resolve_wsl_home_impl(&distro)
 }

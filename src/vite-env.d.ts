@@ -38,6 +38,9 @@ declare global {
       getSettings: () => Promise<Settings>;
       saveSettings: (settings: Settings) => Promise<boolean>;
       checkForUpdates: () => Promise<void>;
+      // WSL 相关 API
+      listWSLDistros: () => Promise<string[]>;
+      resolveWSLHome: (distro: string) => Promise<string>;
       getAppConfigPath: () => Promise<string>;
       openAppConfigFolder: () => Promise<void>;
     };

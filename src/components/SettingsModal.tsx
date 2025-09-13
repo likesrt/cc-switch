@@ -21,6 +21,10 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [settings, setSettings] = useState<Settings>({
     showInTray: true,
   });
+  const [targetEnv, setTargetEnv] = useState<"windows" | "wsl">("windows");
+  const [wslDistro, setWslDistro] = useState<string>("");
+  const [distros, setDistros] = useState<string[]>([]);
+  const [loadingDistros, setLoadingDistros] = useState(false);
   const [configPath, setConfigPath] = useState<string>("");
   const [version, setVersion] = useState<string>("");
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
@@ -50,7 +54,18 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     try {
       const loadedSettings = await window.api.getSettings();
       if ((loadedSettings as any)?.showInTray !== undefined) {
-        setSettings({ showInTray: (loadedSettings as any).showInTray });
+        setSettings({
+          showInTray: (loadedSettings as any).showInTray,
+          targetEnv: (loadedSettings as any).targetEnv,
+          wslDistro: (loadedSettings as any).wslDistro,
+        });
+        if ((loadedSettings as any).targetEnv === "wsl") {
+          setTargetEnv("wsl");
+          setWslDistro((loadedSettings as any).wslDistro || "");
+        } else {
+          setTargetEnv("windows");
+          setWslDistro("");
+        }
       } else if ((loadedSettings as any)?.showInDock !== undefined) {
         // 向后兼容：若历史上有 showInDock，则映射为 showInTray
         setSettings({ showInTray: (loadedSettings as any).showInDock });
@@ -73,12 +88,37 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
   const saveSettings = async () => {
     try {
-      await window.api.saveSettings(settings);
+      await window.api.saveSettings({
+        showInTray: settings.showInTray,
+        targetEnv,
+        wslDistro: targetEnv === "wsl" ? wslDistro : undefined,
+      });
       onClose();
     } catch (error) {
       console.error("保存设置失败:", error);
     }
   };
+
+  const refreshDistros = async () => {
+    setLoadingDistros(true);
+    try {
+      const list = await window.api.listWSLDistros();
+      setDistros(list);
+      if (!wslDistro && list.length > 0) {
+        setWslDistro(list[0]);
+      }
+    } catch (error) {
+      console.error("加载 WSL 发行版失败:", error);
+    } finally {
+      setLoadingDistros(false);
+    }
+  };
+
+  useEffect(() => {
+    if (targetEnv === "wsl") {
+      refreshDistros();
+    }
+  }, [targetEnv]);
 
   const handleCheckUpdate = async () => {
     if (hasUpdate && updateHandle) {
@@ -194,6 +234,60 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               />
             </label>
           </div> */}
+
+          {/* 目标环境 */}
+          <div>
+            <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">
+              目标环境
+            </h3>
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                <input
+                  type="radio"
+                  name="targetEnv"
+                  checked={targetEnv === "windows"}
+                  onChange={() => setTargetEnv("windows")}
+                />
+                Windows（默认）
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                <input
+                  type="radio"
+                  name="targetEnv"
+                  checked={targetEnv === "wsl"}
+                  onChange={() => setTargetEnv("wsl")}
+                />
+                WSL（写入 Linux 家目录）
+              </label>
+            </div>
+            {targetEnv === "wsl" && (
+              <div className="mt-3 flex items-center gap-2">
+                <select
+                  className="flex-1 px-3 py-2 bg-gray-100 dark:bg-gray-800 rounded-lg text-sm"
+                  value={wslDistro}
+                  onChange={(e) => setWslDistro(e.target.value)}
+                >
+                  {distros.length === 0 && (
+                    <option value="" disabled>
+                      {loadingDistros ? "加载中..." : "未发现发行版"}
+                    </option>
+                  )}
+                  {distros.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={refreshDistros}
+                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                  title="刷新 WSL 发行版"
+                >
+                  <RefreshCw size={18} className="text-gray-500 dark:text-gray-400" />
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* 配置文件位置 */}
           <div>
