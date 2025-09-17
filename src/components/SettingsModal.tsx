@@ -10,6 +10,7 @@ import {
   FolderSearch,
 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
+import { homeDir, join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import "../lib/tauri-api";
 import { relaunchApp } from "../lib/updater";
@@ -207,6 +208,37 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     }
   };
 
+  const computeDefaultConfigDir = async (app: AppType) => {
+    try {
+      const home = await homeDir();
+      const folder = app === "claude" ? ".claude" : ".codex";
+      return await join(home, folder);
+    } catch (error) {
+      console.error("获取默认配置目录失败:", error);
+      return "";
+    }
+  };
+
+  const handleResetConfigDir = async (app: AppType) => {
+    setSettings((prev) => ({
+      ...prev,
+      ...(app === "claude"
+        ? { claudeConfigDir: undefined }
+        : { codexConfigDir: undefined }),
+    }));
+
+    const defaultDir = await computeDefaultConfigDir(app);
+    if (!defaultDir) {
+      return;
+    }
+
+    if (app === "claude") {
+      setResolvedClaudeDir(defaultDir);
+    } else {
+      setResolvedCodexDir(defaultDir);
+    }
+  };
+
   const handleOpenReleaseNotes = async () => {
     try {
       const targetVersion = updateInfo?.availableVersion || version;
@@ -336,14 +368,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   </button>
                   <button
                     type="button"
-                    onClick={() =>
-                      setSettings({
-                        ...settings,
-                        claudeConfigDir: undefined,
-                      })
-                    }
+                    onClick={() => handleResetConfigDir("claude")}
                     className="px-2 py-2 text-xs text-gray-500 dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-                    title="恢复默认目录"
+                    title="恢复默认目录（需保存后生效）"
                   >
                     <Undo2 size={16} />
                   </button>
@@ -377,14 +404,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   </button>
                   <button
                     type="button"
-                    onClick={() =>
-                      setSettings({
-                        ...settings,
-                        codexConfigDir: undefined,
-                      })
-                    }
+                    onClick={() => handleResetConfigDir("codex")}
                     className="px-2 py-2 text-xs text-gray-500 dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-                    title="恢复默认目录"
+                    title="恢复默认目录（需保存后生效）"
                   >
                     <Undo2 size={16} />
                   </button>
