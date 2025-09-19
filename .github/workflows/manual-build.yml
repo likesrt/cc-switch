@@ -1,0 +1,205 @@
+name: Manual Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build'
+        required: true
+        default: 'feature/configurable-close-behavior'
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: manual-build-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-2022
+          - os: ubuntu-22.04
+          - os: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add macOS targets
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          # Core build tools and pkg-config
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            pkg-config \
+            curl \
+            wget \
+            file \
+            patchelf \
+            libssl-dev
+          # GTK/GLib stack for gdk-3.0, glib-2.0, gio-2.0
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev
+          # WebKit2GTK (version differs across Ubuntu images; try 4.1 then 4.0)
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
+            || sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev
+          # libsoup also changed major version; prefer 3.0 with fallback to 2.4
+          sudo apt-get install -y --no-install-recommends libsoup-3.0-dev \
+            || sudo apt-get install -y --no-install-recommends libsoup2.4-dev
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 10.12.3
+          run_install: false
+
+      - name: Get pnpm store directory
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-store-
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri App (macOS)
+        if: runner.os == 'macOS'
+        run: pnpm tauri build --target universal-apple-darwin
+
+      - name: Build Tauri App (Windows)
+        if: runner.os == 'Windows'
+        run: pnpm tauri build
+
+      - name: Build Tauri App (Linux)
+        if: runner.os == 'Linux'
+        run: pnpm tauri build
+
+      - name: Prepare macOS Assets
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p build-artifacts
+          echo "Looking for .app for zip..."
+          APP_PATH=""
+          for path in \
+            "src-tauri/target/universal-apple-darwin/release/bundle/macos" \
+            "src-tauri/target/aarch64-apple-darwin/release/bundle/macos" \
+            "src-tauri/target/x86_64-apple-darwin/release/bundle/macos" \
+            "src-tauri/target/release/bundle/macos"; do
+            if [ -d "$path" ]; then
+              [ -z "$APP_PATH" ] && APP_PATH=$(find "$path" -maxdepth 1 -name "*.app" -type d | head -1 || true)
+            fi
+          done
+          if [ -n "$APP_PATH" ]; then
+            APP_DIR=$(dirname "$APP_PATH"); APP_NAME=$(basename "$APP_PATH")
+            cd "$APP_DIR"
+            ditto -c -k --sequesterRsrc --keepParent "$APP_NAME" "CC-Switch-macOS-test.zip"
+            mv "CC-Switch-macOS-test.zip" "$GITHUB_WORKSPACE/build-artifacts/"
+            echo "macOS zip ready: CC-Switch-macOS-test.zip"
+          else
+            echo "No .app found" >&2
+            exit 1
+          fi
+
+      - name: Prepare Windows Assets
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path build-artifacts | Out-Null
+          # MSI 安装器
+          $msi = Get-ChildItem -Path 'src-tauri/target/release/bundle/msi' -Recurse -Include *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $msi) {
+            # 兜底：全局搜索 .msi
+            $msi = Get-ChildItem -Path 'src-tauri/target/release/bundle' -Recurse -Include *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if ($null -ne $msi) {
+            $dest = 'CC-Switch-Setup-test.msi'
+            Copy-Item $msi.FullName (Join-Path build-artifacts $dest)
+            Write-Host "Installer copied: $dest"
+          } else {
+            Write-Warning 'No Windows MSI installer found'
+          }
+          # 绿色版
+          $exeCandidates = @(
+            'src-tauri/target/release/cc-switch.exe',
+            'src-tauri/target/x86_64-pc-windows-msvc/release/cc-switch.exe'
+          )
+          $exePath = $exeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if ($null -ne $exePath) {
+            $portableDir = 'build-artifacts/CC-Switch-Portable'
+            New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+            Copy-Item $exePath $portableDir
+            Compress-Archive -Path "$portableDir/*" -DestinationPath 'build-artifacts/CC-Switch-Windows-Portable-test.zip' -Force
+            Remove-Item -Recurse -Force $portableDir
+            Write-Host 'Windows portable zip created'
+          } else {
+            Write-Warning 'Portable exe not found'
+          }
+
+      - name: Prepare Linux Assets
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p build-artifacts
+          # AppImage
+          APPIMAGE=$(find src-tauri/target/release/bundle -name "*.AppImage" | head -1 || true)
+          if [ -n "$APPIMAGE" ]; then
+            cp "$APPIMAGE" build-artifacts/CC-Switch-Linux-test.AppImage
+            echo "AppImage copied"
+          else
+            echo "No AppImage found" >&2
+          fi
+          # .deb package
+          DEB=$(find src-tauri/target/release/bundle -name "*.deb" | head -1 || true)
+          if [ -n "$DEB" ]; then
+            cp "$DEB" build-artifacts/CC-Switch-Linux-test.deb
+            echo "Deb package copied"
+          else
+            echo "No .deb found"
+          fi
+
+      - name: List built artifacts
+        shell: bash
+        run: |
+          ls -la build-artifacts || true
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-switch-${{ runner.os }}-${{ github.sha }}
+          path: build-artifacts/
+          retention-days: 7
