@@ -12,7 +12,11 @@ import {
   validateJsonConfig,
 } from "../utils/providerConfigUtils";
 import { providerPresets } from "../config/providerPresets";
-import { codexProviderPresets } from "../config/codexProviderPresets";
+import {
+  codexProviderPresets,
+  generateThirdPartyAuth,
+  generateThirdPartyConfig,
+} from "../config/codexProviderPresets";
 import PresetSelector from "./ProviderForm/PresetSelector";
 import ApiKeyInput from "./ProviderForm/ApiKeyInput";
 import ClaudeConfigEditor from "./ProviderForm/ClaudeConfigEditor";
@@ -60,7 +64,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
       : "",
   });
   const [category, setCategory] = useState<ProviderCategory | undefined>(
-    initialData?.category,
+    initialData?.category
   );
 
   // Claude 模型配置状态
@@ -72,9 +76,11 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
   const [codexAuth, setCodexAuthState] = useState("");
   const [codexConfig, setCodexConfigState] = useState("");
   const [codexApiKey, setCodexApiKey] = useState("");
+  const [isCodexTemplateModalOpen, setIsCodexTemplateModalOpen] =
+    useState(false);
   // -1 表示自定义，null 表示未选择，>= 0 表示预设索引
   const [selectedCodexPreset, setSelectedCodexPreset] = useState<number | null>(
-    showPresets && isCodex ? -1 : null,
+    showPresets && isCodex ? -1 : null
   );
 
   const setCodexAuth = (value: string) => {
@@ -135,25 +141,25 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
   const [codexCommonConfigSnippet, setCodexCommonConfigSnippetState] =
     useState<string>(() => {
       if (typeof window === "undefined") {
-        return DEFAULT_CODEX_COMMON_CONFIG_SNIPPET;
+        return DEFAULT_CODEX_COMMON_CONFIG_SNIPPET.trim();
       }
       try {
         const stored = window.localStorage.getItem(
-          CODEX_COMMON_CONFIG_STORAGE_KEY,
+          CODEX_COMMON_CONFIG_STORAGE_KEY
         );
         if (stored && stored.trim()) {
-          return stored;
+          return stored.trim();
         }
       } catch {
         // ignore localStorage 读取失败
       }
-      return DEFAULT_CODEX_COMMON_CONFIG_SNIPPET;
+      return DEFAULT_CODEX_COMMON_CONFIG_SNIPPET.trim();
     });
   const [codexCommonConfigError, setCodexCommonConfigError] = useState("");
   const isUpdatingFromCodexCommonConfig = useRef(false);
   // -1 表示自定义，null 表示未选择，>= 0 表示预设索引
   const [selectedPreset, setSelectedPreset] = useState<number | null>(
-    showPresets ? -1 : null,
+    showPresets ? -1 : null
   );
   const [apiKey, setApiKey] = useState("");
   const [codexAuthError, setCodexAuthError] = useState("");
@@ -222,11 +228,11 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
         const configString = JSON.stringify(
           initialData.settingsConfig,
           null,
-          2,
+          2
         );
         const hasCommon = hasCommonConfigSnippet(
           configString,
-          commonConfigSnippet,
+          commonConfigSnippet
         );
         setUseCommonConfig(hasCommon);
         setSettingsConfigError(validateSettingsConfig(configString));
@@ -242,14 +248,14 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
           if (config.env) {
             setClaudeModel(config.env.ANTHROPIC_MODEL || "");
             setClaudeSmallFastModel(
-              config.env.ANTHROPIC_SMALL_FAST_MODEL || "",
+              config.env.ANTHROPIC_SMALL_FAST_MODEL || ""
             );
             setBaseUrl(config.env.ANTHROPIC_BASE_URL || ""); // 初始化基础 URL
 
             // 初始化 Kimi 模型选择
             setKimiAnthropicModel(config.env.ANTHROPIC_MODEL || "");
             setKimiAnthropicSmallFastModel(
-              config.env.ANTHROPIC_SMALL_FAST_MODEL || "",
+              config.env.ANTHROPIC_SMALL_FAST_MODEL || ""
             );
           }
         }
@@ -257,7 +263,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
         // Codex 初始化时检查 TOML 通用配置
         const hasCommon = hasTomlCommonConfigSnippet(
           codexConfig,
-          codexCommonConfigSnippet,
+          codexCommonConfigSnippet
         );
         setUseCodexCommonConfig(hasCommon);
       }
@@ -277,7 +283,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
       if (selectedPreset !== null && selectedPreset >= 0) {
         const preset = providerPresets[selectedPreset];
         setCategory(
-          preset?.category || (preset?.isOfficial ? "official" : undefined),
+          preset?.category || (preset?.isOfficial ? "official" : undefined)
         );
       } else if (selectedPreset === -1) {
         setCategory("custom");
@@ -286,7 +292,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
       if (selectedCodexPreset !== null && selectedCodexPreset >= 0) {
         const preset = codexProviderPresets[selectedCodexPreset];
         setCategory(
-          preset?.category || (preset?.isOfficial ? "official" : undefined),
+          preset?.category || (preset?.isOfficial ? "official" : undefined)
         );
       } else if (selectedCodexPreset === -1) {
         setCategory("custom");
@@ -301,7 +307,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
       if (commonConfigSnippet.trim()) {
         window.localStorage.setItem(
           COMMON_CONFIG_STORAGE_KEY,
-          commonConfigSnippet,
+          commonConfigSnippet
         );
       } else {
         window.localStorage.removeItem(COMMON_CONFIG_STORAGE_KEY);
@@ -364,7 +370,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
       }
     } else {
       const currentSettingsError = validateSettingsConfig(
-        formData.settingsConfig,
+        formData.settingsConfig
       );
       setSettingsConfigError(currentSettingsError);
       if (currentSettingsError) {
@@ -395,7 +401,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
   };
 
   const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
   ) => {
     const { name, value } = e.target;
 
@@ -413,10 +419,10 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
       // 不再从 JSON 自动提取或覆盖官网地址，只更新配置内容
       updateSettingsConfigValue(value);
     } else {
-      setFormData({
-        ...formData,
+      setFormData((prev) => ({
+        ...prev,
         [name]: value,
-      });
+      }));
     }
   };
 
@@ -425,7 +431,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
     const { updatedConfig, error: snippetError } = updateCommonConfigSnippet(
       formData.settingsConfig,
       commonConfigSnippet,
-      checked,
+      checked
     );
 
     if (snippetError) {
@@ -458,7 +464,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
         const { updatedConfig } = updateCommonConfigSnippet(
           formData.settingsConfig,
           previousSnippet,
-          false,
+          false
         );
         // 直接更新 formData，不通过 handleChange
         updateSettingsConfigValue(updatedConfig);
@@ -480,7 +486,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
       const removeResult = updateCommonConfigSnippet(
         formData.settingsConfig,
         previousSnippet,
-        false,
+        false
       );
       if (removeResult.error) {
         setCommonConfigError(removeResult.error);
@@ -492,7 +498,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
       const addResult = updateCommonConfigSnippet(
         removeResult.updatedConfig,
         value,
-        true,
+        true
       );
 
       if (addResult.error) {
@@ -532,7 +538,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
     });
     setSettingsConfigError(validateSettingsConfig(configString));
     setCategory(
-      preset.category || (preset.isOfficial ? "official" : undefined),
+      preset.category || (preset.isOfficial ? "official" : undefined)
     );
 
     // 设置选中的预设
@@ -558,7 +564,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
         if (preset.name?.includes("Kimi")) {
           setKimiAnthropicModel(config.env.ANTHROPIC_MODEL || "");
           setKimiAnthropicSmallFastModel(
-            config.env.ANTHROPIC_SMALL_FAST_MODEL || "",
+            config.env.ANTHROPIC_SMALL_FAST_MODEL || ""
           );
         }
       } else {
@@ -604,7 +610,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
   // Codex: 应用预设
   const applyCodexPreset = (
     preset: (typeof codexProviderPresets)[0],
-    index: number,
+    index: number
   ) => {
     const authString = JSON.stringify(preset.auth || {}, null, 2);
     setCodexAuth(authString);
@@ -618,7 +624,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
 
     setSelectedCodexPreset(index);
     setCategory(
-      preset.category || (preset.isOfficial ? "official" : undefined),
+      preset.category || (preset.isOfficial ? "official" : undefined)
     );
 
     // 清空 API Key，让用户重新输入
@@ -628,14 +634,23 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
   // Codex: 处理点击自定义按钮
   const handleCodexCustomClick = () => {
     setSelectedCodexPreset(-1);
+
+    // 设置自定义模板
+    const customAuth = generateThirdPartyAuth("");
+    const customConfig = generateThirdPartyConfig(
+      "custom",
+      "https://your-api-endpoint.com/v1",
+      "gpt-5-codex"
+    );
+
     setFormData({
       name: "",
       websiteUrl: "",
       settingsConfig: "",
     });
     setSettingsConfigError(validateSettingsConfig(""));
-    setCodexAuth("");
-    setCodexConfig("");
+    setCodexAuth(JSON.stringify(customAuth, null, 2));
+    setCodexConfig(customConfig);
     setCodexApiKey("");
     setCategory("custom");
   };
@@ -647,7 +662,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
     const configString = setApiKeyInConfig(
       formData.settingsConfig,
       key.trim(),
-      { createIfMissing: selectedPreset !== null && selectedPreset !== -1 },
+      { createIfMissing: selectedPreset !== null && selectedPreset !== -1 }
     );
 
     // 更新表单配置
@@ -689,12 +704,9 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
 
   // Codex: 处理通用配置开关
   const handleCodexCommonConfigToggle = (checked: boolean) => {
+    const snippet = codexCommonConfigSnippet.trim();
     const { updatedConfig, error: snippetError } =
-      updateTomlCommonConfigSnippet(
-        codexConfig,
-        codexCommonConfigSnippet,
-        checked,
-      );
+      updateTomlCommonConfigSnippet(codexConfig, snippet, checked);
 
     if (snippetError) {
       setCodexCommonConfigError(snippetError);
@@ -715,16 +727,17 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
 
   // Codex: 处理通用配置片段变化
   const handleCodexCommonConfigSnippetChange = (value: string) => {
-    const previousSnippet = codexCommonConfigSnippet;
+    const previousSnippet = codexCommonConfigSnippet.trim();
+    const sanitizedValue = value.trim();
     setCodexCommonConfigSnippet(value);
 
-    if (!value.trim()) {
+    if (!sanitizedValue) {
       setCodexCommonConfigError("");
       if (useCodexCommonConfig) {
         const { updatedConfig } = updateTomlCommonConfigSnippet(
           codexConfig,
           previousSnippet,
-          false,
+          false
         );
         setCodexConfig(updatedConfig);
         setUseCodexCommonConfig(false);
@@ -737,12 +750,12 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
       const removeResult = updateTomlCommonConfigSnippet(
         codexConfig,
         previousSnippet,
-        false,
+        false
       );
       const addResult = updateTomlCommonConfigSnippet(
         removeResult.updatedConfig,
-        value,
-        true,
+        sanitizedValue,
+        true
       );
 
       if (addResult.error) {
@@ -762,7 +775,10 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
     // 保存 Codex 通用配置到 localStorage
     if (typeof window !== "undefined") {
       try {
-        window.localStorage.setItem(CODEX_COMMON_CONFIG_STORAGE_KEY, value);
+        window.localStorage.setItem(
+          CODEX_COMMON_CONFIG_STORAGE_KEY,
+          sanitizedValue
+        );
       } catch {
         // ignore localStorage 写入失败
       }
@@ -774,7 +790,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
     if (!isUpdatingFromCodexCommonConfig.current) {
       const hasCommon = hasTomlCommonConfigSnippet(
         value,
-        codexCommonConfigSnippet,
+        codexCommonConfigSnippet
       );
       setUseCodexCommonConfig(hasCommon);
     }
@@ -831,7 +847,12 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
   // 获取当前供应商的网址
   const getCurrentWebsiteUrl = () => {
     if (selectedPreset !== null && selectedPreset >= 0) {
-      return providerPresets[selectedPreset]?.websiteUrl || "";
+      const preset = providerPresets[selectedPreset];
+      if (!preset) return "";
+      // 仅第三方供应商使用专用 apiKeyUrl，其余使用官网地址
+      return preset.category === "third_party"
+        ? preset.apiKeyUrl || preset.websiteUrl || ""
+        : preset.websiteUrl || "";
     }
     return formData.websiteUrl || "";
   };
@@ -839,7 +860,12 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
   // 获取 Codex 当前供应商的网址
   const getCurrentCodexWebsiteUrl = () => {
     if (selectedCodexPreset !== null && selectedCodexPreset >= 0) {
-      return codexProviderPresets[selectedCodexPreset]?.websiteUrl || "";
+      const preset = codexProviderPresets[selectedCodexPreset];
+      if (!preset) return "";
+      // 仅第三方供应商使用专用 apiKeyUrl，其余使用官网地址
+      return preset.category === "third_party"
+        ? preset.apiKeyUrl || preset.websiteUrl || ""
+        : preset.websiteUrl || "";
     }
     return formData.websiteUrl || "";
   };
@@ -868,7 +894,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
         codexProviderPresets[selectedCodexPreset]?.category === "official")) ||
     category === "official";
 
-  // 判断是否显示 Codex 的"获取 API Key"链接
+  // 判断是否显示 Codex 的"获取 API Key"链接（国产官方、聚合站和第三方显示）
   const shouldShowCodexApiKeyLink =
     isCodex &&
     !isCodexOfficialPreset &&
@@ -887,7 +913,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
   // 处理模型输入变化，自动更新 JSON 配置
   const handleModelChange = (
     field: "ANTHROPIC_MODEL" | "ANTHROPIC_SMALL_FAST_MODEL",
-    value: string,
+    value: string
   ) => {
     if (field === "ANTHROPIC_MODEL") {
       setClaudeModel(value);
@@ -917,7 +943,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
   // Kimi 模型选择处理函数
   const handleKimiModelChange = (
     field: "ANTHROPIC_MODEL" | "ANTHROPIC_SMALL_FAST_MODEL",
-    value: string,
+    value: string
   ) => {
     if (field === "ANTHROPIC_MODEL") {
       setKimiAnthropicModel(value);
@@ -942,7 +968,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
   useEffect(() => {
     if (!initialData) return;
     const parsedKey = getApiKeyFromConfig(
-      JSON.stringify(initialData.settingsConfig),
+      JSON.stringify(initialData.settingsConfig)
     );
     if (parsedKey) setApiKey(parsedKey);
   }, [initialData]);
@@ -1023,6 +1049,18 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
                   applyCodexPreset(codexProviderPresets[index], index)
                 }
                 onCustomClick={handleCodexCustomClick}
+                renderCustomDescription={() => (
+                  <>
+                    手动配置供应商，需要填写完整的配置信息，或者
+                    <button
+                      type="button"
+                      onClick={() => setIsCodexTemplateModalOpen(true)}
+                      className="text-blue-400 dark:text-blue-500 hover:text-blue-500 dark:hover:text-blue-400 transition-colors ml-1"
+                    >
+                      使用配置向导
+                    </button>
+                  </>
+                )}
               />
             )}
 
@@ -1192,6 +1230,21 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
                 }
                 commonConfigError={codexCommonConfigError}
                 authError={codexAuthError}
+                isCustomMode={selectedCodexPreset === -1}
+                onWebsiteUrlChange={(url) => {
+                  setFormData((prev) => ({
+                    ...prev,
+                    websiteUrl: url,
+                  }));
+                }}
+                onNameChange={(name) => {
+                  setFormData((prev) => ({
+                    ...prev,
+                    name,
+                  }));
+                }}
+                isTemplateModalOpen={isCodexTemplateModalOpen}
+                setIsTemplateModalOpen={setIsCodexTemplateModalOpen}
               />
             ) : (
               <>
@@ -1233,7 +1286,7 @@ const ProviderForm: React.FC<ProviderFormProps> = ({
                           onChange={(e) =>
                             handleModelChange(
                               "ANTHROPIC_SMALL_FAST_MODEL",
-                              e.target.value,
+                              e.target.value
                             )
                           }
                           placeholder="例如: GLM-4.5-Air"
