@@ -9,4 +9,5 @@ release/
 .npmrc
 CLAUDE.md
 AGENTS.md
-docs/
+/.claude
+/.vscode

@@ -1,20 +1,26 @@
 mod app_config;
+mod app_store;
+mod claude_mcp;
+mod claude_plugin;
 mod codex_config;
 mod commands;
 mod config;
+mod import_export;
+mod mcp;
 mod migration;
 mod provider;
 mod settings;
+mod speedtest;
+mod usage_script;
 mod store;
-mod vscode;
 
 use store::AppState;
-#[cfg(target_os = "macos")]
-use tauri::RunEvent;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuBuilder, MenuItem},
     tray::{TrayIconBuilder, TrayIconEvent},
 };
+#[cfg(target_os = "macos")]
+use tauri::{ActivationPolicy, RunEvent};
 use tauri::{Emitter, Manager};
 
 /// 创建动态托盘菜单
@@ -43,7 +49,28 @@ fn create_tray_menu(
         menu_builder = menu_builder.item(&claude_header);
 
         if !claude_manager.providers.is_empty() {
-            for (id, provider) in &claude_manager.providers {
+            // Sort providers by sortIndex, then by createdAt, then by name
+            let mut sorted_providers: Vec<_> = claude_manager.providers.iter().collect();
+            sorted_providers.sort_by(|(_, a), (_, b)| {
+                // Priority 1: sortIndex
+                match (a.sort_index, b.sort_index) {
+                    (Some(idx_a), Some(idx_b)) => return idx_a.cmp(&idx_b),
+                    (Some(_), None) => return std::cmp::Ordering::Less,
+                    (None, Some(_)) => return std::cmp::Ordering::Greater,
+                    _ => {}
+                }
+                // Priority 2: createdAt
+                match (a.created_at, b.created_at) {
+                    (Some(time_a), Some(time_b)) => return time_a.cmp(&time_b),
+                    (Some(_), None) => return std::cmp::Ordering::Greater,
+                    (None, Some(_)) => return std::cmp::Ordering::Less,
+                    _ => {}
+                }
+                // Priority 3: name
+                a.name.cmp(&b.name)
+            });
+
+            for (id, provider) in sorted_providers {
                 let is_current = claude_manager.current == *id;
                 let item = CheckMenuItem::with_id(
                     app,
@@ -78,7 +105,28 @@ fn create_tray_menu(
         menu_builder = menu_builder.item(&codex_header);
 
         if !codex_manager.providers.is_empty() {
-            for (id, provider) in &codex_manager.providers {
+            // Sort providers by sortIndex, then by createdAt, then by name
+            let mut sorted_providers: Vec<_> = codex_manager.providers.iter().collect();
+            sorted_providers.sort_by(|(_, a), (_, b)| {
+                // Priority 1: sortIndex
+                match (a.sort_index, b.sort_index) {
+                    (Some(idx_a), Some(idx_b)) => return idx_a.cmp(&idx_b),
+                    (Some(_), None) => return std::cmp::Ordering::Less,
+                    (None, Some(_)) => return std::cmp::Ordering::Greater,
+                    _ => {}
+                }
+                // Priority 2: createdAt
+                match (a.created_at, b.created_at) {
+                    (Some(time_a), Some(time_b)) => return time_a.cmp(&time_b),
+                    (Some(_), None) => return std::cmp::Ordering::Greater,
+                    (None, Some(_)) => return std::cmp::Ordering::Less,
+                    _ => {}
+                }
+                // Priority 3: name
+                a.name.cmp(&b.name)
+            });
+
+            for (id, provider) in sorted_providers {
                 let is_current = codex_manager.current == *id;
                 let item = CheckMenuItem::with_id(
                     app,
@@ -116,6 +164,23 @@ fn create_tray_menu(
         .map_err(|e| format!("构建菜单失败: {}", e))
 }
 
+#[cfg(target_os = "macos")]
+fn apply_tray_policy(app: &tauri::AppHandle, dock_visible: bool) {
+    let desired_policy = if dock_visible {
+        ActivationPolicy::Regular
+    } else {
+        ActivationPolicy::Accessory
+    };
+
+    if let Err(err) = app.set_dock_visibility(dock_visible) {
+        log::warn!("设置 Dock 显示状态失败: {}", err);
+    }
+
+    if let Err(err) = app.set_activation_policy(desired_policy) {
+        log::warn!("设置激活策略失败: {}", err);
+    }
+}
+
 /// 处理托盘菜单事件
 fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
     log::info!("处理托盘菜单事件: {}", event_id);
@@ -123,9 +188,17 @@ fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
     match event_id {
         "show_main" => {
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = window.set_skip_taskbar(false);
+                }
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
+                #[cfg(target_os = "macos")]
+                {
+                    apply_tray_policy(app, true);
+                }
             }
         }
         "quit" => {
@@ -190,7 +263,7 @@ async fn switch_provider_internal(
         let provider_id_clone = provider_id.clone();
 
         crate::commands::switch_provider(
-            app_state.clone().into(),
+            app_state.clone(),
             Some(app_type),
             None,
             None,
@@ -237,19 +310,48 @@ async fn update_tray_menu(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default()
-        // 拦截窗口关闭：仅隐藏窗口，保持进程与托盘常驻
-        .on_window_event(|window, event| match event {
-            tauri::WindowEvent::CloseRequested { api, .. } => {
-                api.prevent_close();
-                let _ = window.hide();
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
             }
-            _ => {}
+        }));
+    }
+
+    let builder = builder
+        // 拦截窗口关闭：根据设置决定是否最小化到托盘
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let settings = crate::settings::get_settings();
+
+                if settings.minimize_to_tray_on_close {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    #[cfg(target_os = "windows")]
+                    {
+                        let _ = window.set_skip_taskbar(true);
+                    }
+                    #[cfg(target_os = "macos")]
+                    {
+                        apply_tray_policy(window.app_handle(), false);
+                    }
+                } else {
+                    window.app_handle().exit(0);
+                }
+            }
         })
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
         .setup(|app| {
+            // 设置全局 AppHandle 以供 Store 使用
+            app_store::set_app_handle(app.handle().clone());
             // 注册 Updater 插件（桌面端）
             #[cfg(desktop)]
             {
@@ -303,10 +405,15 @@ pub fn run() {
             // 初始化应用状态（仅创建一次，并在本函数末尾注入 manage）
             let app_state = AppState::new();
 
+            // 迁移旧的 app_config_dir 配置到 Store
+            if let Err(e) = app_store::migrate_app_config_dir_from_settings(&app.handle()) {
+                log::warn!("迁移 app_config_dir 失败: {}", e);
+            }
+
             // 首次启动迁移：扫描副本文件，合并到 config.json，并归档副本；旧 config.json 先归档
             {
                 let mut config_guard = app_state.config.lock().unwrap();
-                let migrated = migration::migrate_copies_into_config(&mut *config_guard)?;
+                let migrated = migration::migrate_copies_into_config(&mut config_guard)?;
                 if migrated {
                     log::info!("已将副本文件导入到 config.json，并完成归档");
                 }
@@ -319,7 +426,7 @@ pub fn run() {
             let _ = app_state.save();
 
             // 创建动态托盘菜单
-            let menu = create_tray_menu(&app.handle(), &app_state)?;
+            let menu = create_tray_menu(app.handle(), &app_state)?;
 
             // 构建托盘
             let mut tray_builder = TrayIconBuilder::with_id("main")
@@ -359,12 +466,49 @@ pub fn run() {
             commands::open_external,
             commands::get_app_config_path,
             commands::open_app_config_folder,
+            commands::read_live_provider_settings,
             commands::get_settings,
             commands::save_settings,
+            commands::restart_app,
             commands::check_for_updates,
-            commands::get_vscode_settings_status,
-            commands::read_vscode_settings,
-            commands::write_vscode_settings,
+            commands::is_portable_mode,
+            commands::get_claude_plugin_status,
+            commands::read_claude_plugin_config,
+            commands::apply_claude_plugin_config,
+            commands::is_claude_plugin_applied,
+            // Claude MCP management
+            commands::get_claude_mcp_status,
+            commands::read_claude_mcp_config,
+            commands::upsert_claude_mcp_server,
+            commands::delete_claude_mcp_server,
+            commands::validate_mcp_command,
+            // usage query
+            commands::query_provider_usage,
+            // New MCP via config.json (SSOT)
+            commands::get_mcp_config,
+            commands::upsert_mcp_server_in_config,
+            commands::delete_mcp_server_in_config,
+            commands::set_mcp_enabled,
+            commands::sync_enabled_mcp_to_claude,
+            commands::sync_enabled_mcp_to_codex,
+            commands::import_mcp_from_claude,
+            commands::import_mcp_from_codex,
+            // ours: endpoint speed test + custom endpoint management
+            commands::test_api_endpoints,
+            commands::get_custom_endpoints,
+            commands::add_custom_endpoint,
+            commands::remove_custom_endpoint,
+            commands::update_endpoint_last_used,
+            // app_config_dir override via Store
+            commands::get_app_config_dir_override,
+            commands::set_app_config_dir_override,
+            // provider sort order management
+            commands::update_providers_sort_order,
+            // theirs: config import/export and dialogs
+            import_export::export_config_to_file,
+            import_export::import_config_from_file,
+            import_export::save_file_dialog,
+            import_export::open_file_dialog,
             update_tray_menu,
         ]);
 
@@ -375,15 +519,17 @@ pub fn run() {
     app.run(|app_handle, event| {
         #[cfg(target_os = "macos")]
         // macOS 在 Dock 图标被点击并重新激活应用时会触发 Reopen 事件，这里手动恢复主窗口
-        match event {
-            RunEvent::Reopen { .. } => {
-                if let Some(window) = app_handle.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
+        if let RunEvent::Reopen { .. } = event {
+            if let Some(window) = app_handle.get_webview_window("main") {
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = window.set_skip_taskbar(false);
                 }
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+                apply_tray_policy(app_handle, true);
             }
-            _ => {}
         }
 
         #[cfg(not(target_os = "macos"))]
